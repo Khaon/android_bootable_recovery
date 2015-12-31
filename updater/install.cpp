@@ -568,83 +568,89 @@ Value* PackageExtractDirFn(const char* name, State* state,
 //   to return the entire contents of the file as the result of this
 //   function (the char* returned is actually a FileContents*).
 Value* PackageExtractFileFn(const char* name, State* state,
-	int argc, Expr* argv[]) {
-	if (argc < 1 || argc > 2) {
-		return ErrorAbort(state, "%s() expects 1 or 2 args, got %d",
-			name, argc);
-	}
-	bool success = false;
+                           int argc, Expr* argv[]) {
+    if (argc < 1 || argc > 2) {
+        return ErrorAbort(state, "%s() expects 1 or 2 args, got %d",
+                          name, argc);
+    }
+    bool success = false;
 
-	if (argc == 2) {
-		// The two-argument version extracts to a file.
+    if (argc == 2) {
+        // The two-argument version extracts to a file.
 
-		ZipArchive* za = ((UpdaterInfo*)(state->cookie))->package_zip;
+        ZipArchive* za = ((UpdaterInfo*)(state->cookie))->package_zip;
 
-		char* zip_path;
-		char* dest_path;
-		if (ReadArgs(state, argv, 2, &zip_path, &dest_path) < 0) return NULL;
+        char* zip_path;
+        char* dest_path;
+        if (ReadArgs(state, argv, 2, &zip_path, &dest_path) < 0) return NULL;
 
-		const ZipEntry* entry = mzFindZipEntry(za, zip_path);
-		if (entry == NULL) {
-			printf("%s: no %s in package\n", name, zip_path);
-			goto done2;
-		}
+        const ZipEntry* entry = mzFindZipEntry(za, zip_path);
+        if (entry == NULL) {
+            printf("%s: no %s in package\n", name, zip_path);
+            goto done2;
+        }
 
-		{
-			FILE* f = fopen(dest_path, "wb");
-			if (f == NULL) {
-				printf("%s: can't open %s for write: %s\n",
-					name, dest_path, strerror(errno));
-				goto done2;
-			}
-			success = mzExtractZipEntryToFile(za, entry, fileno(f));
-			fclose(f);
-		}
+        {
+            int fd = TEMP_FAILURE_RETRY(open(dest_path, O_WRONLY | O_CREAT | O_TRUNC | O_SYNC,
+                  S_IRUSR | S_IWUSR));
+            if (fd == -1) {
+                printf("%s: can't open %s for write: %s\n", name, dest_path, strerror(errno));
+                goto done2;
+            }
+            success = mzExtractZipEntryToFile(za, entry, fd);
+            if (fsync(fd) == -1) {
+                printf("fsync of \"%s\" failed: %s\n", dest_path, strerror(errno));
+                success = false;
+            }
+            if (close(fd) == -1) {
+                printf("close of \"%s\" failed: %s\n", dest_path, strerror(errno));
+                success = false;
+            }
+        }
 
-	done2:
-		free(zip_path);
-		free(dest_path);
-		return StringValue(strdup(success ? "t" : ""));
-	}
-	else {
-		// The one-argument version returns the contents of the file
-		// as the result.
+      done2:
+        free(zip_path);
+        free(dest_path);
+        return StringValue(strdup(success ? "t" : ""));
+    } else {
+        // The one-argument version returns the contents of the file
+        // as the result.
 
-		char* zip_path;
-		Value* v = reinterpret_cast<Value*>(malloc(sizeof(Value)));
-		v->type = VAL_BLOB;
-		v->size = -1;
-		v->data = NULL;
+        char* zip_path;
+        Value* v = reinterpret_cast<Value*>(malloc(sizeof(Value)));
+        v->type = VAL_BLOB;
+        v->size = -1;
+        v->data = NULL;
 
-		if (ReadArgs(state, argv, 1, &zip_path) < 0) return NULL;
+        if (ReadArgs(state, argv, 1, &zip_path) < 0) return NULL;
 
-		ZipArchive* za = ((UpdaterInfo*)(state->cookie))->package_zip;
-		const ZipEntry* entry = mzFindZipEntry(za, zip_path);
-		if (entry == NULL) {
-			printf("%s: no %s in package\n", name, zip_path);
-			goto done1;
-		}
+        ZipArchive* za = ((UpdaterInfo*)(state->cookie))->package_zip;
+        const ZipEntry* entry = mzFindZipEntry(za, zip_path);
+        if (entry == NULL) {
+            printf("%s: no %s in package\n", name, zip_path);
+            goto done1;
+        }
 
-		v->size = mzGetZipEntryUncompLen(entry);
-		v->data = reinterpret_cast<char*>(malloc(v->size));
-		if (v->data == NULL) {
-			printf("%s: failed to allocate %ld bytes for %s\n",
-				name, (long)v->size, zip_path);
-			goto done1;
-		}
+        v->size = mzGetZipEntryUncompLen(entry);
+        v->data = reinterpret_cast<char*>(malloc(v->size));
+        if (v->data == NULL) {
+            printf("%s: failed to allocate %ld bytes for %s\n",
+                    name, (long)v->size, zip_path);
+            goto done1;
+        }
 
-		success = mzExtractZipEntryToBuffer(za, entry,
-			(unsigned char *)v->data);
+        success = mzExtractZipEntryToBuffer(za, entry,
+                                            (unsigned char *)v->data);
 
-	done1:
-		free(zip_path);
-		if (!success) {
-			free(v->data);
-			v->data = NULL;
-			v->size = -1;
-		}
-		return v;
-	}
+      done1:
+        free(zip_path);
+        if (!success) {
+            free(v->data);
+            v->data = NULL;
+            v->size = -1;
+        }
+        return v;
+    }
 }
 
 // Create all parent directories of name, if necessary.
